@@ -1,0 +1,110 @@
+name: CI
+
+# Runs on every change. The point is that a broken commit is caught here rather
+# than in a release, where a bad artefact is already public and a tag has to be
+# deleted to take it back.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: CI only reads the repository. Nothing here writes to it.
+permissions:
+  contents: read
+
+# A new push to the same branch makes the previous run's result irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (node ${{ matrix.node }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Do not let one failing combination hide the others: knowing that the
+      # build works on Linux but not Windows is the whole point of a matrix.
+      fail-fast: false
+      matrix:
+        # ubuntu = what the release job runs on; windows = what most users are
+        # on; macos = catches path-case and newline assumptions.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 18 is the declared floor in package.json. If the code stops working on
+        # it, that declaration is a lie, and CI should say so.
+        node: ['18', '22']
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # There are no dependencies, so there is nothing to install and no
+      # lockfile to install it from. `npm ci` refuses to run without a
+      # lockfile, and generating one would add a file that never changes except
+      # when npm's format does.
+      #
+      # If a dependency is ever added, replace this with `npm ci` and commit the
+      # lockfile, so the tests run against pinned versions.
+      - name: Confirm there are no dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          deps=$(node -p "Object.keys(require('./package.json').dependencies || {}).length")
+          devdeps=$(node -p "Object.keys(require('./package.json').devDependencies || {}).length")
+          echo "dependencies: $deps, devDependencies: $devdeps"
+          if [ "$deps" != "0" ] || [ "$devdeps" != "0" ]; then
+            echo "::error::dependencies were added; switch this job to 'npm ci' with a committed lockfile"
+            exit 1
+          fi
+
+      - name: Static checks (syntax, manifest, permissions, popup wiring)
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+      # The release script is the thing that actually ships to users, so it is
+      # exercised on every platform. It wrote a Windows-only archive once, which
+      # would have failed only in the release job — after the tag existed.
+      - name: Build the release package
+        run: npm run release
+
+      - name: Confirm the package is a readable zip with the manifest at its root
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip=$(ls dist/*.zip)
+          echo "package: $zip"
+          # `unzip -l` fails on a truncated or malformed archive, which is the
+          # exact failure mode a hand-written zip writer is prone to.
+          unzip -l "$zip"
+          unzip -l "$zip" | grep -qE ' manifest\.json$' \
+            || { echo "::error::manifest.json is not at the archive root"; exit 1; }
+          # Every file the archive claims must be present and non-empty.
+          test -s dist/*.zip.sha256 && echo "checksum file present"
+          sha=$(cut -d' ' -f1 < dist/*.zip.sha256)
+          actual=$(sha256sum "$zip" | cut -d' ' -f1 || shasum -a 256 "$zip" | cut -d' ' -f1)
+          [ "$sha" = "$actual" ] || { echo "::error::checksum does not match the zip"; exit 1; }
+          echo "checksum verified: $sha"
+
+  # A single required status check is much easier to protect a branch with than
+  # a 6-entry matrix, and it stops being valid the moment one leg fails.
+  ci-complete:
+    name: CI complete
+    runs-on: ubuntu-latest
+    needs: [verify]
+    if: always()
+    steps:
+      - name: Fail unless every verify job succeeded
+        run: |
+          echo "verify result: ${{ needs.verify.result }}"
+          if [ "${{ needs.verify.result }}" != "success" ]; then
+            echo "::error::one or more verification jobs failed"
+            exit 1
+          fi

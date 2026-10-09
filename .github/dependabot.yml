@@ -1,0 +1,35 @@
+# Automatically keep actions and tooling up to date.
+#
+# The extension itself has no dependencies, so this only watches the things that
+# actually matter: the GitHub Actions used by the workflows. Pinning an action to
+# a major tag means it silently picks up new releases; this raises a PR instead,
+# so a change to a build step is reviewed like any other change.
+#
+# Actions are referenced by major tag (e.g. actions/checkout@v4) rather than by
+# commit SHA. For a project where the CI signs release artefacts, pinning build
+# actions to full SHAs is stricter and worth considering; the tradeoff is that
+# every bump becomes a manual review, which is what this bot is for.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'ci'
+    labels:
+      - dependencies
+      - github-actions
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    # There are no dependencies today. This entry exists so that if one is ever
+    # added, it is watched from the start rather than forgotten.
+    commit-message:
+      prefix: 'deps'
+    labels:
+      - dependencies

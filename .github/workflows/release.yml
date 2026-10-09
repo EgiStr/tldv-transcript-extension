@@ -1,0 +1,258 @@
+name: Release
+
+# A release starts from a tag and nothing else. Tag-driven means the artefact
+# always corresponds to an immutable commit, and the version in the filename is
+# the version that was tagged.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify tag and build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # No dependencies and no lockfile, so there is nothing to install;
+      # `npm ci` would fail for want of a lockfile. Guard the assumption instead
+      # of silently installing whatever a future package.json happens to list.
+      - name: Confirm there are no dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          deps=$(node -p "Object.keys(require('./package.json').dependencies || {}).length")
+          devdeps=$(node -p "Object.keys(require('./package.json').devDependencies || {}).length")
+          echo "dependencies: $deps, devDependencies: $devdeps"
+          if [ "$deps" != "0" ] || [ "$devdeps" != "0" ]; then
+            echo "::error::dependencies were added; this job must install them before building"
+            exit 1
+          fi
+
+      # The tag is the version users see in the filename and the release title,
+      # so it must agree with manifest.json. Chrome reads the manifest version
+      # when installing; if the two disagree, users install "1.0.0" from a
+      # release page that says "1.0.1" and there is no way to tell which is real.
+      - name: Check the tag matches manifest.json
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          manifest=$(node -p "require('./manifest.json').version")
+          pkg=$(node -p "require('./package.json').version")
+
+          echo "tag=$tag manifest=$manifest package.json=$pkg"
+
+          if [ "$tag" != "v$manifest" ]; then
+            case "$tag" in
+              "v$manifest"-[0-9A-Za-z.-]*) ;;
+              *)
+                echo "::error::tag $tag does not match manifest.json version $manifest"
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [ "$pkg" != "$manifest" ]; then
+            echo "::error::package.json ($pkg) and manifest.json ($manifest) disagree"
+            exit 1
+          fi
+
+          echo "version=$manifest" >> "$GITHUB_OUTPUT"
+          echo "Tag and manifest agree on $manifest"
+
+      - name: Static checks
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build the release package
+        run: npm run release
+
+      # Re-verify here rather than trusting the CI run: a tag can be pushed at
+      # any commit, including one that never passed CI.
+      - name: Verify the archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip=$(ls dist/*.zip)
+          unzip -l "$zip" | grep -qE ' manifest\.json$' \
+            || { echo "::error::manifest.json is not at the archive root"; exit 1; }
+          sha=$(cut -d' ' -f1 < dist/*.zip.sha256)
+          actual=$(sha256sum "$zip" | cut -d' ' -f1)
+          [ "$sha" = "$actual" ] || { echo "::error::checksum mismatch"; exit 1; }
+          echo "verified $zip -> $sha"
+
+      # The zip is what users install. The provenance attestation is what lets
+      # them confirm it was built from this repository at this commit, without
+      # having to trust the release page.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/*.zip
+
+      - name: Upload the package for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          # Attestation bundles are written next to the subject; keep them with
+          # the job that produced them.
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: [verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the attestation
+      attestations: write # record it
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # full history, so release notes can list real commits
+
+      - name: Download the built package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: dist
+
+      - name: List what will be published
+        run: ls -l dist
+
+      # Notes are generated from the commits since the previous tag, grouped
+      # into sections. Hand-written notes drift; generated ones never claim a
+      # change that is not in the history.
+      - name: Generate release notes
+        id: notes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            let previous = '';
+            try {
+              const tags = await github.rest.repos.listTags({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100
+              });
+              const older = tags.data.filter((t) => t.name !== tag);
+              previous = older.length ? older[0].name : '';
+            } catch (e) {
+              core.warning('could not list tags: ' + e.message);
+            }
+
+            const range = previous ? previous + '..' + tag : tag;
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+            const log = execSync(
+              'git log --no-merges --pretty=format:"%H%x09%s" ' + range,
+              { encoding: 'utf8' }
+            ).trim();
+
+            const lines = log ? log.split('\n') : [];
+            const catalog = { added: [], fixed: [], changed: [], other: [] };
+            const patterns = [
+              ['added', /^add|^feat|^introduce|^new\b/i],
+              ['fixed', /^fix|^bug|^correct|^revert/i],
+              ['changed', /^update|^change|^refactor|^improve|^bump|^doc|^test|^chore/i]
+            ];
+            for (const line of lines) {
+              const message = line.split('\t').slice(1).join('\t');
+              const bucket = patterns.find(([, re]) => re.test(message));
+              catalog[bucket ? bucket[0] : 'other'].push(message);
+            }
+
+            const headings = {
+              added: 'Added', fixed: 'Fixed', changed: 'Changed', other: 'Other'
+            };
+            let body = '';
+            if (previous) {
+              body += 'Changes since `' + previous + '`.\n\n';
+            }
+            for (const key of ['added', 'fixed', 'changed', 'other']) {
+              if (!catalog[key].length) continue;
+              body += '### ' + headings[key] + '\n';
+              for (const m of catalog[key]) body += '- ' + m + '\n';
+              body += '\n';
+            }
+            if (!body) body = 'No changes recorded.\n';
+
+            fs.writeFileSync('notes.md', body);
+            core.setOutput('has_notes', 'true');
+
+      - name: Append install and verification info
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Install"
+            echo ""
+            echo "Chrome 154 and other recent stable builds refuse \`--load-extension\`, so"
+            echo "the extension is installed from the UI. Full walkthrough:"
+            echo "[docs/INSTALL.md](docs/INSTALL.md) · [Panduan (ID)](docs/PANDUAN.md)"
+            echo ""
+            echo "1. Download \`tldv-transcript-exporter-v${version}.zip\` below and extract it to a **permanent** folder"
+            echo "2. Open \`chrome://extensions\` and turn on **Developer mode**"
+            echo "3. Click **Load unpacked** and select the extracted folder"
+            echo ""
+            echo "## Verify the download"
+            echo ""
+            echo "\`\`\`"
+            echo "$(cat dist/*.zip.sha256)"
+            echo "\`\`\`"
+            echo ""
+            echo "## Verify the build"
+            echo ""
+            echo "This release is signed with a build provenance attestation, so you can"
+            echo "confirm the zip was built from this repository at this tag:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "gh attestation verify tldv-transcript-exporter-v${version}.zip --repo \$GITHUB_REPOSITORY"
+            echo "\`\`\`"
+          } >> notes.md
+          cat notes.md
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: notes.md
+          draft: false
+          # A tag with a suffix (v1.1.0-beta.1) is marked as a prerelease so it
+          # does not become the "latest" download.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/*.zip
+            dist/*.sha256
+          # A release that already exists is updated, so re-running a failed
+          # job repairs it instead of erroring out.
+          fail_on_unmatched_files: true
+          generate_release_notes: false
