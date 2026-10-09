@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "tl;dv Transcript Exporter",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Export the complete transcript from a tl;dv meeting to Markdown, TXT, or JSON. Works around the free-tier copy limit by rendering every block.",
   "author": "EgiStr",
   "homepage_url": "https://github.com/EgiStr/tldv-transcript-skill",
