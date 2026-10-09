@@ -39,12 +39,43 @@ const allFiles = walk(ROOT);
 
 // ------------------------------------------------------------- syntax check
 
+// ------------------------------------------------------------- syntax check
+
 console.log('\n[1] JavaScript syntax');
 const jsFiles = allFiles.filter((f) => f.endsWith('.js') && !f.includes('node_modules'));
+
+/**
+ * Syntax-check one file the way that file will actually be loaded.
+ *
+ * `node --check` parses its input as CommonJS unless the file is `.mjs` or the
+ * nearest package.json says `"type": "module"`. This extension's service worker
+ * and its lib/ modules are real ES modules but cannot carry that flag: the same
+ * lib files are ALSO loaded as classic scripts by the content script, and
+ * package.json governs the whole tree. So `--check` rejects them outright.
+ *
+ * Node 22 tolerates this; Node 18 does not, which is how this was found — the
+ * check passed locally and failed on the Node 18 CI leg. Piping the source with
+ * `--input-type=module` checks the real grammar on every Node version without
+ * renaming files or flagging the whole package.
+ */
+function syntaxCheckArgs(absPath, relPath) {
+  // Service worker, popup, and lib/ are ESM. util.js is dual-published
+  // (module.exports for Node, globalThis in the browser) so it parses either
+  // way. Everything else (scripts/, tests/) is CommonJS.
+  const isEsm = relPath.startsWith('src/') && relPath !== 'src/lib/util.js';
+  return isEsm
+    ? { args: ['--input-type=module', '--check'], input: fs.readFileSync(absPath, 'utf8') }
+    : { args: ['--check'], input: undefined };
+}
+
 for (const f of jsFiles) {
-  const rel = path.relative(ROOT, f);
+  const rel = path.relative(ROOT, f).split(path.sep).join('/');
+  const { args, input } = syntaxCheckArgs(f, rel);
   try {
-    execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' });
+    execFileSync(process.execPath, args, {
+      stdio: 'pipe',
+      ...(input === undefined ? {} : { input })
+    });
     ok(rel);
   } catch (e) {
     fail(rel + ' -> ' + String(e.stderr || e.message).split('\n')[0]);
@@ -275,57 +306,116 @@ for (const cs of (manifest && manifest.content_scripts) || []) {
 // The service worker is an ES module, but the lib files are classic scripts
 // that publish on globalThis. Importing those directly as ESM yields an empty
 // namespace, which fails at RUNTIME with "X is not a function" and is invisible
-// to a syntax check. This actually imports the modules to prove it works.
+// to a syntax check. This actually exercises the modules to prove it works.
+//
+// Why this does not simply `import('./src/lib/bridge.js')`:
+//
+// `bridge.js` is an ES module to Chrome — an MV3 service worker treats every
+// .js file it loads as a module, regardless of package.json. Node has to be
+// told, and under Node 18 a .js file with no `"type": "module"` in the nearest
+// package.json is treated as CommonJS, so a named import from it fails with
+// "Named export 'util' not found".
+//
+// Adding `"type": "module"` to package.json would fix Node and break nothing in
+// Chrome — but it would also switch the meaning of the CommonJS `src/lib/*`
+// files for Node, which the unit tests load with `require`. So the check builds
+// a temporary package.json declaring module scope NEXT TO A COPY of the tree,
+// and runs the real import there. Chrome's behaviour is what matters; this
+// reproduces it on the Node version that is hardest to please.
 console.log('\n[5] ESM bridge');
-(async () => {
-  try {
-    const url = require('node:url').pathToFileURL(
-      path.join(ROOT, 'src', 'lib', 'bridge.js')
-    ).href;
-    const mod = await import(url);
 
-    if (mod.util && typeof mod.util.formatTime === 'function') ok('util exports functions');
-    else fail('util did not export usable functions');
+const bridgeProbe = (() => {
+  const fsTmp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'tldv-esm-'));
 
-    if (mod.verify && typeof mod.verify.check === 'function') ok('verify exports functions');
-    else fail('verify did not export usable functions');
+  // Copy only what the import graph needs, plus a package.json that puts the
+  // whole copy in ES-module scope.
+  const copyOf = path.join(fsTmp, 'src');
+  fs.mkdirSync(copyOf, { recursive: true });
+  fs.cpSync(path.join(ROOT, 'src'), copyOf, { recursive: true });
+  fs.writeFileSync(
+    path.join(fsTmp, 'package.json'),
+    JSON.stringify({ type: 'module' })
+  );
 
-    if (mod.markdown && typeof mod.markdown.toMarkdown === 'function') ok('markdown exports functions');
-    else fail('markdown did not export usable functions');
+  const probePath = path.join(fsTmp, 'probe.mjs');
+  fs.writeFileSync(
+    probePath,
+    `
+import { util as U, verify as Verify, markdown as Markdown } from './src/lib/bridge.js';
+import { buildOutput } from './src/lib/output.js';
 
-    // Prove the whole output path works end to end with real data.
-    const outputUrl = require('node:url').pathToFileURL(
-      path.join(ROOT, 'src', 'lib', 'output.js')
-    ).href;
-    const out = await import(outputUrl);
+const out = [];
+const ok = (m) => out.push('ok ' + m);
+const fail = (m) => out.push('fail ' + m);
 
-    const rows = [
-      { index: 0, ms: 0, time: '00:00', speaker: 'A', text: 'halo' },
-      { index: 1, ms: 60000, time: '01:00', speaker: 'B', text: 'ya | tidak' }
-    ];
-    for (const fmt of ['md', 'txt', 'json']) {
-      const built = out.buildOutput({ rows, format: fmt, meetingId: 'abc' });
-      if (built.content && built.filename.endsWith('.' + fmt)) {
-        ok('buildOutput produces ' + fmt + ' (' + built.content.length + ' chars)');
-      } else {
-        fail('buildOutput failed for ' + fmt);
-      }
-    }
+for (const [name, mod, fn] of [
+  ['util', U, 'formatTime'],
+  ['verify', Verify, 'check'],
+  ['markdown', Markdown, 'toMarkdown']
+]) {
+  if (mod && typeof mod[fn] === 'function') ok(name + ' exports functions');
+  else fail(name + ' did not export usable functions');
+}
 
-    // A pipe in the text must survive as an escaped pipe, not split the row.
-    const md = out.buildOutput({ rows, format: 'md', meetingId: 'abc' }).content;
-    if (md.includes('ya \\| tidak')) ok('pipe escaping survives the ESM path');
-    else fail('pipe escaping broken through the ESM path');
-  } catch (e) {
-    fail('importing the bridge threw: ' + (e && e.message ? e.message : e));
-  }
+const rows = [
+  { index: 0, ms: 0, time: '00:00', speaker: 'A', text: 'halo' },
+  { index: 1, ms: 60000, time: '01:00', speaker: 'B', text: 'ya | tidak' }
+];
 
-  console.log('');
-  if (failures === 0) {
-    console.log('Static checks passed.');
-    process.exit(0);
+for (const fmt of ['md', 'txt', 'json']) {
+  const built = buildOutput({ rows, format: fmt, meetingId: 'abc' });
+  if (built.content && built.filename.endsWith('.' + fmt)) {
+    ok('buildOutput produces ' + fmt + ' (' + built.content.length + ' chars)');
   } else {
-    console.error(failures + ' static check(s) failed.');
-    process.exit(1);
+    fail('buildOutput failed for ' + fmt);
   }
+}
+
+const md = buildOutput({ rows, format: 'md', meetingId: 'abc' }).content;
+if (md.includes('ya \\\\| tidak')) ok('pipe escaping survives the ESM path');
+else fail('pipe escaping broken through the ESM path');
+
+console.log(out.join('\\n'));
+`
+  );
+
+  return { dir: fsTmp, probePath };
 })();
+
+{
+  let probeOut = '';
+  let probeErr = '';
+  try {
+    probeOut = execFileSync(process.execPath, [bridgeProbe.probePath], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf8'
+    });
+  } catch (e) {
+    probeErr = String(e.stderr || e.message || e);
+  }
+
+  if (probeErr) {
+    fail('the ESM bridge is broken: ' + probeErr.split('\n').find((l) => l.trim() && !l.startsWith('file:'))?.trim());
+  }
+
+  for (const line of probeOut.split('\n')) {
+    if (!line.trim()) continue;
+    if (line.startsWith('ok ')) ok(line.slice(3));
+    else if (line.startsWith('fail ')) fail(line.slice(5));
+  }
+
+  if (!probeOut.includes('buildOutput produces md')) {
+    fail('the ESM bridge probe produced no results');
+  }
+
+  fs.rmSync(bridgeProbe.dir, { recursive: true, force: true });
+}
+
+console.log('');
+if (failures === 0) {
+  console.log('Static checks passed.');
+  process.exit(0);
+} else {
+  console.error(failures + ' static check(s) failed.');
+  process.exit(1);
+}

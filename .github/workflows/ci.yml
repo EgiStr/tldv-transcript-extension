@@ -30,9 +30,13 @@ jobs:
         # ubuntu = what the release job runs on; windows = what most users are
         # on; macos = catches path-case and newline assumptions.
         os: [ubuntu-latest, windows-latest, macos-latest]
-        # 18 is the declared floor in package.json. If the code stops working on
-        # it, that declaration is a lie, and CI should say so.
-        node: ['18', '22']
+        # 18 is the declared floor in package.json. 20 and 22 are the current
+        # LTS and current release. All three are listed because they genuinely
+        # differ here: Node 18 treats a .js file as CommonJS when the package is
+        # not marked as a module, and Node 20 and 22 disagree about whether a
+        # bare directory is a valid test target. Each of those was a real
+        # failure that only this matrix surfaced.
+        node: ['18', '20', '22']
     steps:
       - name: Check out
         uses: actions/checkout@v4

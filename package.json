@@ -4,7 +4,7 @@
   "private": true,
   "description": "Chrome extension: export complete tl;dv meeting transcripts to Markdown, TXT, or JSON.",
   "scripts": {
-    "test": "node --test tests/*.test.js",
+    "test": "node --test tests/block.test.js tests/lib.test.js tests/speaker.test.js",
     "check": "node scripts/check.js",
     "verify": "npm run check && npm test",
     "release": "node scripts/build-release.js"
