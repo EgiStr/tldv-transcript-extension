@@ -212,13 +212,24 @@ jobs:
             if (!body) body = 'No changes recorded.\n';
 
             fs.writeFileSync('notes.md', body);
-            core.setOutput('has_notes', 'true');
+
+            // Multi-line values go through $GITHUB_OUTPUT as a heredoc. Written
+            // to disk as well, so the step log can be read to see exactly what
+            // was published.
+            const delim = 'EOF_NOTES';
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              'body<<' + delim + '\n' + body + delim + '\n'
+            );
 
       - name: Append install and verification info
+        id: notes
         shell: bash
         run: |
           set -euo pipefail
           version="${{ needs.verify.outputs.version }}"
+          # Carry over what the previous step wrote, then append.
+          cp notes.md full-notes.md
           {
             echo ""
             echo "---"
@@ -247,14 +258,32 @@ jobs:
             echo "\`\`\`bash"
             echo "gh attestation verify tldv-transcript-exporter-v${version}.zip --repo ${GITHUB_REPOSITORY}"
             echo "\`\`\`"
-          } >> notes.md
-          cat notes.md
+          } >> full-notes.md
+
+          # Hand the complete notes to the Publish step as a multi-line output.
+          # `body` (not `body_path`) is what makes a re-run rewrite the notes of
+          # an existing release instead of keeping the old ones.
+          {
+            echo "body<<EOF_NOTES"
+            cat full-notes.md
+            echo "EOF_NOTES"
+          } >> "$GITHUB_OUTPUT"
+
+          cat full-notes.md
 
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          body_path: notes.md
+          # `body`, NOT `body_path`.
+          #
+          # With `body_path` this action uploads the new assets but leaves an
+          # existing release body untouched. Re-running a tag (the documented
+          # way to repair a failed release) therefore republishes the zip while
+          # keeping the OLD notes — the published page silently disagrees with
+          # the command that produced it. That is how a fixed notes template
+          # still showed the pre-fix placeholder on v1.1.1.
+          body: ${{ steps.notes.outputs.body }}
           draft: false
           # A tag with a suffix (v1.1.0-beta.1) is marked as a prerelease so it
           # does not become the "latest" download.
