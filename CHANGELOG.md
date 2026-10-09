@@ -10,6 +10,44 @@ the release workflow and publishes the zip with a build provenance attestation.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-09
+
+### Added
+
+- **CI** across Linux, Windows, and macOS on Node 18, 20, and 22, running the
+  static checks, the unit tests, and the release build on every push and pull
+  request.
+- **Tag-driven releases.** Pushing a tag whose version matches `manifest.json`
+  runs the checks, builds the zip, signs a
+  [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations),
+  and publishes the release with generated notes.
+- **SHA256 checksum** published alongside every release zip.
+- `CONTRIBUTING.md`, `SECURITY.md`, issue and pull request templates, and a
+  dependabot configuration scoped to the GitHub Actions actually used.
+
+### Changed
+
+- The release zip is now written by Node instead of PowerShell's
+  `Compress-Archive`, so the build produces the same archive on every platform.
+  It previously would have failed outright on the Linux CI runner.
+
+### Fixed
+
+Three Node version incompatibilities, all found by CI and all invisible when
+developing on a single version:
+
+- `scripts/check.js` syntax-checked ES modules with `node --check`, which parses
+  them as CommonJS. Node 22 tolerates this; Node 18 rejects them outright. ESM
+  sources are now piped in with `--input-type=module`.
+- The ESM bridge check imported `bridge.js` directly. Under Node 18 that file is
+  CommonJS, so a named import failed with `Named export 'util' not found`. The
+  probe now runs against a copy of the tree whose `package.json` declares module
+  scope — which is what Chrome does with an MV3 service worker regardless of
+  `package.json`.
+- `npm test` used a glob that `node --test` does not expand, and a bare
+  directory target that Node 22 rejects. An explicit file list is the only form
+  all three versions accept.
+
 ## [1.0.0] — 2026-10-09
 
 First release.
@@ -64,5 +102,6 @@ row-count check:
 - Releases built in CI from a tag, with a build provenance attestation and a
   published SHA256 checksum.
 
-[Unreleased]: https://github.com/EgiStr/tldv-transcript-extension/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/EgiStr/tldv-transcript-extension/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/EgiStr/tldv-transcript-extension/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/EgiStr/tldv-transcript-extension/releases/tag/v1.0.0
