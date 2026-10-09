@@ -157,7 +157,7 @@ jobs:
       # into sections. Hand-written notes drift; generated ones never claim a
       # change that is not in the history.
       - name: Generate release notes
-        id: notes
+        id: changelog
         uses: actions/github-script@v9
         with:
           script: |

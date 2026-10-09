@@ -299,8 +299,6 @@ for (const cs of (manifest && manifest.content_scripts) || []) {
   }
 }
 
-// ------------------------------------------------------------------ result
-
 // -------------------------------------------------- ESM bridge correctness
 
 // The service worker is an ES module, but the lib files are classic scripts
@@ -409,6 +407,92 @@ console.log(out.join('\\n'));
   }
 
   fs.rmSync(bridgeProbe.dir, { recursive: true, force: true });
+}
+
+// ------------------------------------------------------------ CI workflows
+
+// GitHub rejects a workflow outright when two steps in the same job share an
+// `id`, and the failure is confusing: the Actions tab lists the workflow under
+// its file path instead of its `name`, with no error pointing at the duplicate.
+// That happened here — adding `id: notes` to a second step silently disabled
+// the release workflow, and the tag push produced no run at all.
+//
+// Checked with a small line scan rather than a YAML parser, because this
+// project has no dependencies and a parser is not worth one for a handful of
+// invariants.
+console.log('\n[6] CI workflows');
+
+const workflowsDir = path.join(ROOT, '.github', 'workflows');
+if (!fs.existsSync(workflowsDir)) {
+  fail('.github/workflows is missing');
+} else {
+  const wfFiles = fs.readdirSync(workflowsDir).filter((f) => /\.ya?ml$/.test(f));
+
+  if (wfFiles.length === 0) fail('no workflow files found');
+
+  for (const file of wfFiles) {
+    const rel = '.github/workflows/' + file;
+    const src = fs.readFileSync(path.join(workflowsDir, file), 'utf8');
+
+    if (!/^name:\s*\S/m.test(src)) {
+      fail(rel + ': missing a top-level name:');
+    } else {
+      ok(rel + ': has a name');
+    }
+
+    // `id:` keys from the steps of this single file. Job-level ids do not
+    // exist, so every `id:` here belongs to a step, and duplicates within one
+    // job are what GitHub rejects. Tracking per-file rather than per-job is
+    // deliberately the stricter check.
+    const ids = [];
+    for (const m of src.matchAll(/^\s+id:\s*(\S+)\s*$/gm)) ids.push(m[1]);
+
+    const seen = new Set();
+    const dupes = [];
+    for (const id of ids) {
+      if (seen.has(id)) dupes.push(id);
+      seen.add(id);
+    }
+
+    if (dupes.length) {
+      fail(rel + ': duplicate step id(s): ' + [...new Set(dupes)].join(', '));
+    } else {
+      ok(rel + ': step ids unique (' + (ids.length || 'none') + ')');
+    }
+
+    // A `uses:` referring to a local action path that does not exist would
+    // fail only at run time, on a tag push, after the release was started.
+    for (const m of src.matchAll(/uses:\s*(\.\/[^\s#]+)/g)) {
+      const local = m[1].replace(/^\.\//, '');
+      if (fs.existsSync(path.join(ROOT, local))) ok(rel + ': local action exists: ' + m[1]);
+      else fail(rel + ': local action does not exist: ' + m[1]);
+    }
+  }
+
+  // The release notes are published with `softprops/action-gh-release`. With
+  // `body_path` that action keeps the notes of an already-published release
+  // while replacing its assets, so re-running a tag republishes the zip under
+  // stale notes. `body` is the only form that updates them.
+  const releaseWf = fs.readFileSync(path.join(workflowsDir, 'release.yml'), 'utf8');
+  const publish = releaseWf.slice(releaseWf.indexOf('softprops/action-gh-release'));
+  if (/^\s+body_path:/m.test(publish)) {
+    fail('release.yml publishes with body_path: a re-run keeps the old release notes');
+  } else if (/^\s+body:/m.test(publish)) {
+    ok('release.yml publishes notes with body: (rewritten on re-run)');
+  } else {
+    fail('release.yml does not pass notes to the release action');
+  }
+
+  // Every workflow that runs a release must be able to verify its own tag, and
+  // attestation needs id-token on the job that runs it.
+  if (/attest-build-provenance/.test(releaseWf)) {
+    const verifyJob = releaseWf.slice(0, releaseWf.indexOf('\n  release:'));
+    if (/id-token:\s*write/.test(verifyJob)) {
+      ok('release.yml: attest job has id-token: write');
+    } else {
+      fail('release.yml: attest step runs without id-token: write on its job');
+    }
+  }
 }
 
 console.log('');
