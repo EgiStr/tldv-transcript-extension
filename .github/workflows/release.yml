@@ -16,6 +16,16 @@ jobs:
   verify:
     name: verify tag and build
     runs-on: ubuntu-latest
+    # `id-token: write` and `attestations: write` are required by the attest
+    # step below. Permissions are per-job, not workflow-wide: setting
+    # `contents: read` at the top and `attestations: write` only on the release
+    # job left the attest step here unable to mint an OIDC token, which failed
+    # with "Unable to get ACTIONS_ID_TOKEN_REQUEST_URL env variable" only AFTER
+    # the build had already succeeded.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
