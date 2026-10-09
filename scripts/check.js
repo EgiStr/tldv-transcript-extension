@@ -471,26 +471,51 @@ if (!fs.existsSync(workflowsDir)) {
 
   // The release notes are published with `softprops/action-gh-release`. With
   // `body_path` that action keeps the notes of an already-published release
-  // while replacing its assets, so re-running a tag republishes the zip under
-  // stale notes. `body` is the only form that updates them.
+  // while replacing its assets. With `body` it starts a draft, and when a
+  // release for the tag already exists it logs "Using release N for tag X
+  // instead of duplicate draft M" and discards the draft — which keeps the old
+  // notes too. The only reliable form is `body` plus deleting the existing
+  // release first, so every run takes the create path.
   const releaseWf = fs.readFileSync(path.join(workflowsDir, 'release.yml'), 'utf8');
   const publish = releaseWf.slice(releaseWf.indexOf('softprops/action-gh-release'));
+  const hasBody = /^\s+body:/m.test(publish);
+  const deletesFirst = /gh release delete/.test(releaseWf);
+
   if (/^\s+body_path:/m.test(publish)) {
     fail('release.yml publishes with body_path: a re-run keeps the old release notes');
-  } else if (/^\s+body:/m.test(publish)) {
-    ok('release.yml publishes notes with body: (rewritten on re-run)');
+  } else if (hasBody) {
+    ok('release.yml publishes notes with body:');
   } else {
     fail('release.yml does not pass notes to the release action');
   }
 
+  if (hasBody && !deletesFirst) {
+    fail(
+      'release.yml passes body but never deletes an existing release: on a ' +
+        're-run the action discards its draft and the old notes stay published'
+    );
+  } else if (deletesFirst) {
+    ok('release.yml deletes the existing release before publishing');
+  }
+
   // Every workflow that runs a release must be able to verify its own tag, and
-  // attestation needs id-token on the job that runs it.
+  // attestation needs id-token on the job that runs it; deleting a release
+  // needs contents: write on the job that does it.
   if (/attest-build-provenance/.test(releaseWf)) {
     const verifyJob = releaseWf.slice(0, releaseWf.indexOf('\n  release:'));
     if (/id-token:\s*write/.test(verifyJob)) {
       ok('release.yml: attest job has id-token: write');
     } else {
       fail('release.yml: attest step runs without id-token: write on its job');
+    }
+  }
+
+  if (deletesFirst) {
+    const releaseJob = releaseWf.slice(releaseWf.indexOf('\n  release:'));
+    if (/contents:\s*write/.test(releaseJob)) {
+      ok('release.yml: publish job has contents: write');
+    } else {
+      fail('release.yml: publishes a release without contents: write on its job');
     }
   }
 }

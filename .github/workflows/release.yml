@@ -271,18 +271,38 @@ jobs:
 
           cat full-notes.md
 
+      # Delete any existing release for this tag before publishing.
+      #
+      # softprops/action-gh-release@v2 does NOT update the body of a release
+      # that already exists. On a re-run it creates a draft with the new notes,
+      # finds the existing release, prints
+      #   "Using release N for tag X instead of duplicate draft M"
+      # and discards the draft — keeping the OLD notes and replacing only the
+      # assets. The result is a published page whose verification command and
+      # checksum disagree with what actually shipped.
+      #
+      # Deleting first makes every run take the "create new release" path, which
+      # honours `body`. This is also why re-running a tag repairs a bad release
+      # rather than preserving it.
+      - name: Remove any existing release for this tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "deleting existing release for $tag so the new notes are used"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag=false
+          else
+            echo "no existing release for $tag"
+          fi
+
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          # `body`, NOT `body_path`.
-          #
-          # With `body_path` this action uploads the new assets but leaves an
-          # existing release body untouched. Re-running a tag (the documented
-          # way to repair a failed release) therefore republishes the zip while
-          # keeping the OLD notes — the published page silently disagrees with
-          # the command that produced it. That is how a fixed notes template
-          # still showed the pre-fix placeholder on v1.1.1.
+          # `body` is used because a release is now always created fresh by the
+          # delete step above; this is what carries the generated notes.
           body: ${{ steps.notes.outputs.body }}
           draft: false
           # A tag with a suffix (v1.1.0-beta.1) is marked as a prerelease so it
