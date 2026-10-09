@@ -14,19 +14,40 @@ the release workflow and publishes the zip with a build provenance attestation.
 
 ### Fixed
 
-- The release notes printed a literal `$GITHUB_REPOSITORY` in the attestation
-  verification command instead of the repository name.
+Four defects in the release pipeline itself, each found by running it rather
+than by reading it:
+
+- **The release workflow stopped running entirely.** Two steps in the same job
+  shared `id: notes`. GitHub rejects such a workflow and reports it by file path
+  instead of its name, so a tag push produced no run at all — it looked like the
+  tag had not registered.
+- **A re-run kept the previous release notes.** `softprops/action-gh-release`
+  does not update the body of a release that already exists: it creates a draft,
+  finds the existing release, logs `Using release N for tag X instead of
+  duplicate draft M`, and discards the draft. The zip was replaced; the notes
+  were not, so the published page showed a verification command that disagreed
+  with the download. The release is now deleted before publishing, so every run
+  takes the create path.
+- **The attest step could not sign.** `id-token: write` and
+  `attestations: write` were set on the wrong job, so the build succeeded and
+  then failed with `Unable to get ACTIONS_ID_TOKEN_REQUEST_URL env variable`.
+- **The notes printed a literal `$GITHUB_REPOSITORY`** instead of the repository
+  name, making the verification command unusable as written.
 
 ### Changed
 
-- GitHub Actions bumped to the versions dependabot proposed, after confirming
-  each bump against the workflows that use it: `checkout` v4 → v7, `github-script`
-  v7 → v9, `attest-build-provenance` v3 → v4. The `checkout` v7 breaking change
-  concerns `pull_request_target` and `workflow_run`, neither of which these
-  workflows use; the `github-script` v9 breaking change concerns
-  `require('@actions/github')`, which the release notes script does not call.
-  Verified by publishing a release with the new versions and confirming the
-  attestation still verifies.
+- GitHub Actions bumped to the versions dependabot proposed, after checking each
+  against the workflows that use it: `checkout` v4 → v7, `github-script` v7 → v9,
+  `attest-build-provenance` v3 → v4. The `checkout` v7 breaking change concerns
+  `pull_request_target` and `workflow_run`, neither of which these workflows use;
+  the `github-script` v9 breaking change concerns `require('@actions/github')`,
+  which the notes script does not call. Verified by publishing a release with the
+  new versions and confirming the attestation still verifies.
+- `npm run check` gains a CI-workflow section that fails on duplicate step ids,
+  a missing workflow `name`, a local action path that does not resolve, an attest
+  step without `id-token: write` on its job, and release notes published without
+  deleting the previous release. A release that silently stops running, or
+  silently keeps stale notes, is worse than one that fails loudly.
 
 ## [1.1.0] — 2026-10-09
 
