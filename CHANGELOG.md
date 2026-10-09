@@ -10,6 +10,24 @@ the release workflow and publishes the zip with a build provenance attestation.
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-10-09
+
+### Fixed
+
+- The release notes printed a literal `$GITHUB_REPOSITORY` in the attestation
+  verification command instead of the repository name.
+
+### Changed
+
+- GitHub Actions bumped to the versions dependabot proposed, after confirming
+  each bump against the workflows that use it: `checkout` v4 → v7, `github-script`
+  v7 → v9, `attest-build-provenance` v3 → v4. The `checkout` v7 breaking change
+  concerns `pull_request_target` and `workflow_run`, neither of which these
+  workflows use; the `github-script` v9 breaking change concerns
+  `require('@actions/github')`, which the release notes script does not call.
+  Verified by publishing a release with the new versions and confirming the
+  attestation still verifies.
+
 ## [1.1.0] — 2026-10-09
 
 ### Added
@@ -102,6 +120,7 @@ row-count check:
 - Releases built in CI from a tag, with a build provenance attestation and a
   published SHA256 checksum.
 
-[Unreleased]: https://github.com/EgiStr/tldv-transcript-extension/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/EgiStr/tldv-transcript-extension/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/EgiStr/tldv-transcript-extension/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/EgiStr/tldv-transcript-extension/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/EgiStr/tldv-transcript-extension/releases/tag/v1.0.0

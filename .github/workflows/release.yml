@@ -245,7 +245,7 @@ jobs:
             echo "confirm the zip was built from this repository at this tag:"
             echo ""
             echo "\`\`\`bash"
-            echo "gh attestation verify tldv-transcript-exporter-v${version}.zip --repo \$GITHUB_REPOSITORY"
+            echo "gh attestation verify tldv-transcript-exporter-v${version}.zip --repo ${GITHUB_REPOSITORY}"
             echo "\`\`\`"
           } >> notes.md
           cat notes.md
