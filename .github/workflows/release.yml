@@ -113,7 +113,7 @@ jobs:
       # them confirm it was built from this repository at this commit, without
       # having to trust the release page.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*.zip
 
