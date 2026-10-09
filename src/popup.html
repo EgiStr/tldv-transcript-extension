@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tl;dv Transcript Exporter</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="head">
+    <span class="dot" id="statusDot" aria-hidden="true"></span>
+    <h1>tl;dv Transcript</h1>
+  </header>
+
+  <!-- Shown when the tab is not a tl;dv meeting page -->
+  <section id="viewWrong" class="view" hidden>
+    <p class="muted">Open a tl;dv meeting page, then click this icon again.</p>
+    <p class="muted small">The URL should look like<br>
+      <code>tldv.io/app/meetings/&lt;id&gt;</code></p>
+  </section>
+
+  <!-- Main action view -->
+  <section id="viewMain" class="view" hidden>
+    <p class="muted small" id="meetingLine"></p>
+
+    <label class="field">
+      <span>Format</span>
+      <select id="format">
+        <option value="md">Markdown (.md)</option>
+        <option value="txt">Plain text (.txt)</option>
+        <option value="json">JSON (.json)</option>
+      </select>
+    </label>
+
+    <button id="startBtn" class="primary">Extract transcript</button>
+
+    <div id="progressWrap" class="progress-wrap" hidden>
+      <div class="progress"><div id="progressBar" class="bar"></div></div>
+      <p class="muted small" id="progressText">Starting…</p>
+    </div>
+
+    <div id="errorBox" class="alert" hidden></div>
+  </section>
+
+  <!-- Shown after a successful export -->
+  <section id="viewDone" class="view" hidden>
+    <p class="ok" id="doneLine"></p>
+    <p class="muted small" id="doneFile"></p>
+    <button id="againBtn" class="secondary">Export again</button>
+    <button id="redownloadBtn" class="link">Download last file</button>
+  </section>
+
+  <footer class="foot">
+    <span class="muted small" id="hint"></span>
+  </footer>
+
+  <script src="../src/lib/util.js"></script>
+  <script src="../src/lib/verify.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

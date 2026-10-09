@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "tl;dv Transcript Exporter",
+  "version": "1.0.0",
+  "description": "Export the complete transcript from a tl;dv meeting to Markdown, TXT, or JSON. Works around the free-tier copy limit by rendering every block.",
+  "author": "EgiStr",
+  "homepage_url": "https://github.com/EgiStr/tldv-transcript-skill",
+
+  "permissions": ["downloads", "storage", "scripting"],
+
+  "host_permissions": ["https://tldv.io/*"],
+
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_title": "tl;dv Transcript Exporter",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://tldv.io/app/meetings/*"],
+      "js": [
+        "src/lib/util.js",
+        "src/lib/verify.js",
+        "src/lib/speaker.js",
+        "src/lib/block.js",
+        "src/lib/markdown.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
