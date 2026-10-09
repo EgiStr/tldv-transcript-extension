@@ -30,7 +30,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -139,7 +139,7 @@ jobs:
       attestations: write # record it
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0 # full history, so release notes can list real commits
