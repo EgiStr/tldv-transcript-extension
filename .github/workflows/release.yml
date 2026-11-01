@@ -118,7 +118,7 @@ jobs:
           subject-path: dist/*.zip
 
       - name: Upload the package for the release job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-package
           path: |
