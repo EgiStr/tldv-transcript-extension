@@ -298,7 +298,7 @@ jobs:
           fi
 
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
           # `body` is used because a release is now always created fresh by the
